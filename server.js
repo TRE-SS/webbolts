@@ -8,7 +8,14 @@ const app = express();
 
 // Middleware
 app.use(cors());
-app.use(bodyParser.json());
+app.use((req, res, next) => {
+  if (req.originalUrl === '/stripe-webhook') {
+    next(); // skip body parsing for webhook
+  } else {
+    bodyParser.json()(req, res, next);
+  }
+});
+
 
 // Stripe Webhook Raw Body Parser
 app.post('/stripe-webhook', express.raw({ type: 'application/json' }), (request, response) => {
