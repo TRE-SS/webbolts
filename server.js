@@ -1,4 +1,4 @@
-// WebBolt Studios SaaS Backend API (Fully Upgraded with Namecheap and Discord Webhook)
+// WebBolt Studios SaaS Backend API (Full Dynamic Pricing with Namecheap, Discord, and Stripe)
 
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -6,6 +6,7 @@ const cors = require('cors');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const axios = require('axios');
 const https = require('https');
+const xml2js = require('xml2js');
 const app = express();
 
 const NAMECHEAP_API_USER = 'tartar41';
@@ -51,16 +52,54 @@ app.post('/stripe-webhook', express.raw({ type: 'application/json' }), async (re
   response.send();
 });
 
-// Namecheap Domain Availability Endpoint
+// Namecheap Domain Availability and Pricing Endpoint
 app.get('/check-domain', async (req, res) => {
   const domain = req.query.domain;
   if (!domain) return res.status(400).json({ error: 'Domain query required' });
 
   try {
-    const url = `${NAMECHEAP_BASE_URL}?ApiUser=${NAMECHEAP_API_USER}&ApiKey=${NAMECHEAP_API_KEY}&UserName=${NAMECHEAP_API_USER}&Command=namecheap.domains.check&ClientIp=0.0.0.0&DomainList=${domain}`;
-    const response = await axios.get(url, { httpsAgent: new https.Agent({ rejectUnauthorized: false }) });
-    const available = response.data.includes('<Available>true</Available>');
-    res.json({ available });
+    // Check domain availability
+    const checkUrl = `${NAMECHEAP_BASE_URL}?ApiUser=${NAMECHEAP_API_USER}&ApiKey=${NAMECHEAP_API_KEY}&UserName=${NAMECHEAP_API_USER}&Command=namecheap.domains.check&ClientIp=0.0.0.0&DomainList=${domain}`;
+    const checkResponse = await axios.get(checkUrl, { httpsAgent: new https.Agent({ rejectUnauthorized: false }) });
+    const checkResult = await xml2js.parseStringPromise(checkResponse.data);
+    const available = checkResult.ApiResponse.CommandResponse[0].DomainCheckResult[0].$.Available === 'true';
+
+    if (!available) {
+      return res.json({ available: false });
+    }
+
+    // Get pricing for domain TLD
+    const tld = domain.split('.').pop();
+    const priceUrl = `${NAMECHEAP_BASE_URL}?ApiUser=${NAMECHEAP_API_USER}&ApiKey=${NAMECHEAP_API_KEY}&UserName=${NAMECHEAP_API_USER}&Command=namecheap.users.getPricing&ProductType=DOMAIN&ProductCategory=REGISTER&ClientIp=0.0.0.0`;
+    const priceResponse = await axios.get(priceUrl, { httpsAgent: new https.Agent({ rejectUnauthorized: false }) });
+    const priceResult = await xml2js.parseStringPromise(priceResponse.data);
+    const prices = priceResult.ApiResponse.CommandResponse[0].UserGetPricingResult[0].Product[0].Price;
+
+    let basePrice = null;
+    for (let i = 0; i < prices.length; i++) {
+      if (prices[i].$.TLD === `.${tld}`) {
+        basePrice = parseFloat(prices[i].$.YourPrice);
+        break;
+      }
+    }
+
+    if (!basePrice) return res.status(400).json({ error: 'Unable to retrieve domain pricing.' });
+
+    // Apply markup logic
+    let finalPrice = basePrice;
+    if (basePrice < 20) {
+      finalPrice += 10;
+    } else if (basePrice >= 20 && basePrice <= 100) {
+      finalPrice *= 1.3;
+    } else if (basePrice > 100 && basePrice <= 1000) {
+      finalPrice *= 1.2;
+    } else {
+      finalPrice *= 1.1;
+    }
+
+    finalPrice = Math.ceil(finalPrice); // Round up to nearest dollar
+
+    res.json({ available: true, basePrice, finalPrice });
   } catch (err) {
     console.log('Namecheap Error:', err);
     res.status(500).json({ error: 'Domain check failed' });
