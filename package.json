@@ -1,7 +1,7 @@
 {
   "name": "webbolt-backend",
-  "version": "2.0.0",
-  "description": "WebBolt Studios SaaS Backend API v2 (Domains, Discord, Full Stripe)",
+  "version": "3.0.0",
+  "description": "WebBolt Studios SaaS Backend API with Dynamic Pricing, Namecheap, Discord, and Stripe",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -12,6 +12,6 @@
     "cors": "^2.8.5",
     "stripe": "^12.10.0",
     "axios": "^1.6.7",
-    "https": "^1.0.0"
+    "xml2js": "^0.5.0"
   }
 }
