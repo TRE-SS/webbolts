@@ -8,14 +8,15 @@ const app = express();
 
 // Middleware
 app.use(cors());
+
+// Apply raw body parser only for the webhook route
 app.use((req, res, next) => {
   if (req.originalUrl === '/stripe-webhook') {
-    next(); // skip body parsing for webhook
+    next();
   } else {
     bodyParser.json()(req, res, next);
   }
 });
-
 
 // Stripe Webhook Raw Body Parser
 app.post('/stripe-webhook', express.raw({ type: 'application/json' }), (request, response) => {
