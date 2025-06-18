@@ -1,15 +1,20 @@
-// WebBolt Studios SaaS Backend API (Fully Configured)
+// WebBolt Studios SaaS Backend API (Fully Upgraded with Namecheap and Discord Webhook)
 
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const axios = require('axios');
+const https = require('https');
 const app = express();
+
+const NAMECHEAP_API_USER = 'tartar41';
+const NAMECHEAP_API_KEY = 'e058254b598c486b8914095ec1e6ead0';
+const NAMECHEAP_BASE_URL = 'https://api.namecheap.com/xml.response';
+const DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1384695993995366470/SNknkt4HFYpBZWnF0J29O_6iE8VQyrYw7vU1MSjDCAQB7oHRg2DRNaYAfdNpfT-tAjUv';
 
 // Middleware
 app.use(cors());
-
-// Apply raw body parser only for the webhook route
 app.use((req, res, next) => {
   if (req.originalUrl === '/stripe-webhook') {
     next();
@@ -19,7 +24,7 @@ app.use((req, res, next) => {
 });
 
 // Stripe Webhook Raw Body Parser
-app.post('/stripe-webhook', express.raw({ type: 'application/json' }), (request, response) => {
+app.post('/stripe-webhook', express.raw({ type: 'application/json' }), async (request, response) => {
   const sig = request.headers['stripe-signature'];
   let event;
 
@@ -30,14 +35,36 @@ app.post('/stripe-webhook', express.raw({ type: 'application/json' }), (request,
     return response.sendStatus(400);
   }
 
-  // Handle webhook event
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
     console.log('✅ Payment completed:', session);
-    // This is where you would send emails or update your CRM
+
+    const metadata = session.metadata || {};
+
+    const payload = {
+      content: `✅ New WebBolt Purchase!\n\nCustomer Email: ${session.customer_email}\nPackage: ${metadata.packageName}\nBusiness Name: ${metadata.businessName}\nDomain: ${metadata.domainName || 'N/A'}\nPayment Intent: ${session.payment_intent}`
+    };
+
+    await axios.post(DISCORD_WEBHOOK_URL, payload);
   }
 
   response.send();
+});
+
+// Namecheap Domain Availability Endpoint
+app.get('/check-domain', async (req, res) => {
+  const domain = req.query.domain;
+  if (!domain) return res.status(400).json({ error: 'Domain query required' });
+
+  try {
+    const url = `${NAMECHEAP_BASE_URL}?ApiUser=${NAMECHEAP_API_USER}&ApiKey=${NAMECHEAP_API_KEY}&UserName=${NAMECHEAP_API_USER}&Command=namecheap.domains.check&ClientIp=0.0.0.0&DomainList=${domain}`;
+    const response = await axios.get(url, { httpsAgent: new https.Agent({ rejectUnauthorized: false }) });
+    const available = response.data.includes('<Available>true</Available>');
+    res.json({ available });
+  } catch (err) {
+    console.log('Namecheap Error:', err);
+    res.status(500).json({ error: 'Domain check failed' });
+  }
 });
 
 // Main Create Checkout Session Endpoint
@@ -45,31 +72,23 @@ app.post('/create-checkout-session', async (req, res) => {
   const formData = req.body;
 
   try {
-    let setupPrice = '';
-    let monthlyPrice = '';
-    let domainPrice = '';
+    const setupPrice = formData.package.setupPriceId;
+    const monthlyPrice = formData.package.monthlyPriceId;
 
-    if (formData.package === 'Starter Bolt') {
-      setupPrice = 'price_1RbCL0DGkDEuf0lG0678cvJJ';
-      monthlyPrice = 'price_1RbCLgDGkDEuf0lG8l12yx9Q';
-    } else if (formData.package === 'Pro Bolt') {
-      setupPrice = 'price_1RbCMTDGkDEuf0lGZ4DMGYWl';
-      monthlyPrice = 'price_1RbCN7DGkDEuf0lGATMMzb7Z';
-    } else if (formData.package === 'Business+ Bolt') {
-      setupPrice = 'price_1RbCOWDGkDEuf0lG7kifEbUv';
-      monthlyPrice = 'price_1RbCPPDGkDEuf0lG6uYeeQCl';
-    } else {
-      return res.status(400).json({ error: 'Invalid package selected' });
-    }
-
-    // Check if domain purchase is requested
     const lineItems = [
       { price: setupPrice, quantity: 1 },
       { price: monthlyPrice, quantity: 1 }
     ];
 
-    if (formData.purchaseDomain === true) {
-      lineItems.push({ price: 'price_1RbIfGDGkDEuf0lGa0d7Tssm', quantity: 1 });
+    if (formData.purchaseDomain && formData.domainPrice && formData.domainName) {
+      lineItems.push({
+        price_data: {
+          currency: 'usd',
+          product_data: { name: `Domain Registration: ${formData.domainName}` },
+          unit_amount: formData.domainPrice * 100
+        },
+        quantity: 1
+      });
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -78,7 +97,12 @@ app.post('/create-checkout-session', async (req, res) => {
       customer_email: formData.email,
       line_items: lineItems,
       success_url: 'https://webboltstudios.com/success',
-      cancel_url: 'https://webboltstudios.com/cancel'
+      cancel_url: 'https://webboltstudios.com/cancel',
+      metadata: {
+        packageName: formData.package.name,
+        businessName: formData.businessName,
+        domainName: formData.domainName || ''
+      }
     });
 
     res.json({ url: session.url });
@@ -88,6 +112,5 @@ app.post('/create-checkout-session', async (req, res) => {
   }
 });
 
-// Start Server
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`WebBolt Backend running on port ${PORT}`));
