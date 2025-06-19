@@ -13,8 +13,8 @@ const NAMECHEAP_API_USER = 'tartar41';
 const NAMECHEAP_API_KEY = 'e058254b598c486b8914095ec1e6ead0';
 const NAMECHEAP_BASE_URL = 'https://api.namecheap.com/xml.response';
 const DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1384695993995366470/SNknkt4HFYpBZWnF0J29O_6iE8VQyrYw7vU1MSjDCAQB7oHRg2DRNaYAfdNpfT-tAjUv';
+const CLIENT_IP = '100.20.92.101'; // Render outbound IP whitelisted
 
-// Middleware
 app.use(cors());
 app.use((req, res, next) => {
   if (req.originalUrl === '/stripe-webhook') {
@@ -24,7 +24,6 @@ app.use((req, res, next) => {
   }
 });
 
-// Stripe Webhook Raw Body Parser
 app.post('/stripe-webhook', express.raw({ type: 'application/json' }), async (request, response) => {
   const sig = request.headers['stripe-signature'];
   let event;
@@ -38,66 +37,52 @@ app.post('/stripe-webhook', express.raw({ type: 'application/json' }), async (re
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
-    console.log('✅ Payment completed:', session);
-
     const metadata = session.metadata || {};
-
     const payload = {
       content: `✅ New WebBolt Purchase!\n\nCustomer Email: ${session.customer_email}\nPackage: ${metadata.packageName}\nBusiness Name: ${metadata.businessName}\nDomain: ${metadata.domainName || 'N/A'}\nPayment Intent: ${session.payment_intent}`
     };
-
     await axios.post(DISCORD_WEBHOOK_URL, payload);
   }
-
   response.send();
 });
 
-// Namecheap Domain Availability and Pricing Endpoint
 app.get('/check-domain', async (req, res) => {
   const domain = req.query.domain;
   if (!domain) return res.status(400).json({ error: 'Domain query required' });
 
   try {
-    // Check domain availability
-    const checkUrl = `${NAMECHEAP_BASE_URL}?ApiUser=${NAMECHEAP_API_USER}&ApiKey=${NAMECHEAP_API_KEY}&UserName=${NAMECHEAP_API_USER}&Command=namecheap.domains.check&ClientIp=0.0.0.0&DomainList=${domain}`;
+    const checkUrl = `${NAMECHEAP_BASE_URL}?ApiUser=${NAMECHEAP_API_USER}&ApiKey=${NAMECHEAP_API_KEY}&UserName=${NAMECHEAP_API_USER}&Command=namecheap.domains.check&ClientIp=${CLIENT_IP}&DomainList=${domain}`;
     const checkResponse = await axios.get(checkUrl, { httpsAgent: new https.Agent({ rejectUnauthorized: false }) });
     const checkResult = await xml2js.parseStringPromise(checkResponse.data);
     const available = checkResult.ApiResponse.CommandResponse[0].DomainCheckResult[0].$.Available === 'true';
 
-    if (!available) {
-      return res.json({ available: false });
-    }
+    if (!available) return res.json({ available: false });
 
-    // Get pricing for domain TLD
     const tld = domain.split('.').pop();
-    const priceUrl = `${NAMECHEAP_BASE_URL}?ApiUser=${NAMECHEAP_API_USER}&ApiKey=${NAMECHEAP_API_KEY}&UserName=${NAMECHEAP_API_USER}&Command=namecheap.users.getPricing&ProductType=DOMAIN&ProductCategory=REGISTER&ClientIp=0.0.0.0`;
+    const priceUrl = `${NAMECHEAP_BASE_URL}?ApiUser=${NAMECHEAP_API_USER}&ApiKey=${NAMECHEAP_API_KEY}&UserName=${NAMECHEAP_API_USER}&Command=namecheap.users.getPricing&ProductType=DOMAIN&ProductCategory=REGISTER&ClientIp=${CLIENT_IP}`;
     const priceResponse = await axios.get(priceUrl, { httpsAgent: new https.Agent({ rejectUnauthorized: false }) });
     const priceResult = await xml2js.parseStringPromise(priceResponse.data);
-    const prices = priceResult.ApiResponse.CommandResponse[0].UserGetPricingResult[0].Product[0].Price;
+    const products = priceResult.ApiResponse.CommandResponse[0].UserGetPricingResult[0].Product;
 
     let basePrice = null;
-    for (let i = 0; i < prices.length; i++) {
-      if (prices[i].$.TLD === `.${tld}`) {
-        basePrice = parseFloat(prices[i].$.YourPrice);
-        break;
+    for (let product of products) {
+      for (let price of product.Price) {
+        if (price.$.TLD === `.${tld}`) {
+          basePrice = parseFloat(price.$.YourPrice);
+          break;
+        }
       }
     }
 
     if (!basePrice) return res.status(400).json({ error: 'Unable to retrieve domain pricing.' });
 
-    // Apply markup logic
     let finalPrice = basePrice;
-    if (basePrice < 20) {
-      finalPrice += 10;
-    } else if (basePrice >= 20 && basePrice <= 100) {
-      finalPrice *= 1.3;
-    } else if (basePrice > 100 && basePrice <= 1000) {
-      finalPrice *= 1.2;
-    } else {
-      finalPrice *= 1.1;
-    }
+    if (basePrice < 20) finalPrice += 10;
+    else if (basePrice <= 100) finalPrice *= 1.3;
+    else if (basePrice <= 1000) finalPrice *= 1.2;
+    else finalPrice *= 1.1;
 
-    finalPrice = Math.ceil(finalPrice); // Round up to nearest dollar
+    finalPrice = Math.ceil(finalPrice);
 
     res.json({ available: true, basePrice, finalPrice });
   } catch (err) {
@@ -106,7 +91,6 @@ app.get('/check-domain', async (req, res) => {
   }
 });
 
-// Main Create Checkout Session Endpoint
 app.post('/create-checkout-session', async (req, res) => {
   const formData = req.body;
 
